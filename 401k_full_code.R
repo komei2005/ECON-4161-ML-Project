@@ -239,11 +239,20 @@ print(first_stage_result)
 # 4. Random Forest Model
 # ============================================================
 
+
 # Outcome: total wealth
 outcome <- "tw"
 treatment <- "p401"
 
-# Predictors chosen to avoid mechanical leakage from wealth components
+
+# Predictor set for the Random Forest wealth model.
+# We exclude asset/wealth-component variables such as a401, tfa, net_tfa,
+# tfa_he, hval, hmort, hequity, nifa, net_nifa, and net_n401 because they are
+# mechanically related to total wealth and would create leakage.
+# We also exclude squared/grouped variables because Random Forests handle
+# nonlinearities natively, while those grouped variables are used for the
+# replication and heterogeneity analysis.
+
 predictors <- c(
   "age", "inc", "fsize", "educ", "db", "marr", "male",
   "twoearn", "pira", "hown"
@@ -251,7 +260,11 @@ predictors <- c(
 
 model_data <- data[, c(outcome, treatment, predictors)]
 
-# Stratified 70/30 train/test split by 401(k) participation
+
+# Stratified 70/30 train/test split by 401(k) participation.
+# Stratification keeps the participant/nonparticipant mix similar in both samples.
+# The test set is held out for final predictive evaluation and treatment-effect estimation.
+
 train_index <- createDataPartition(model_data[[treatment]], p = 0.7, list = FALSE)
 train_data <- model_data[train_index, ]
 test_data <- model_data[-train_index, ]
@@ -259,6 +272,9 @@ test_data <- model_data[-train_index, ]
 features <- c(treatment, predictors)
 
 # Cross-validation and tuning
+# Tune Random Forest hyperparameters using 10-fold cross-validation on the training set.
+# The held-out test set is not used during tuning.
+
 cv_control <- trainControl(method = "cv", number = 10)
 
 tune_grid <- expand.grid(
@@ -285,6 +301,11 @@ test_r2 <- 1 - sum((test_data[[outcome]] - test_predictions)^2) /
   sum((test_data[[outcome]] - mean(test_data[[outcome]]))^2)
 
 # Counterfactual prediction exercise
+# S-learner counterfactual prediction:
+# predict each test observation twice, once with p401 forced to 1 and once with
+# p401 forced to 0. The difference is the model-predicted treatment effect.
+# This should be interpreted as a predictive counterfactual estimate, not as a
+# fully causal estimate, because 401(k) participation may be endogenous.
 test_treated <- test_data
 test_treated[[treatment]] <- 1
 
