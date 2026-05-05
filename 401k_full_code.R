@@ -634,4 +634,4 @@ cat("- heterogeneity_by_income.csv\n")
 cat("- heterogeneity_by_education.csv\n")
 cat("- figures/figure_1_total_wealth_density.png\n")
 cat("- figures/figure_2_avg_wealth_by_income_participation.png\n")
-cat("- figures/figure_3_predicted_effect_by_income.png\n")
+cat("- figures/figure_3_predicted_effect_by_income.png\n")ls
