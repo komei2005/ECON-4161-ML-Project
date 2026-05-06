@@ -516,7 +516,7 @@ cat("- lasso_ate_by_education_group.csv\n")
 # Optional Random Forest Benchmark - Not Run in Final Script
 # ============================================================
 # This section is kept only as a record of the alternative model considered.
-# The final report/code uses the LASSO model above because the group selected it
+# The final report/code uses the LASSO model above because we selected it
 # as the preferred final model due to its interpretability and comparable predictive performance.
 # To run this benchmark later, change if (FALSE) to if (TRUE) and make sure the
 # ranger package is installed and loaded.
