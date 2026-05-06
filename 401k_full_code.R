@@ -1,6 +1,6 @@
 # ============================================================
 # 401(k) Project Full Code
-# Data Cleaning + OLS/2SLS Replication + Random Forest Model
+# Data Cleaning + OLS/2SLS Replication + LASSO Model
 # ============================================================
 
 rm(list = ls())
@@ -9,7 +9,7 @@ rm(list = ls())
 # 0. Libraries
 # ============================================================
 
-packages <- c("tidyverse", "ivreg", "caret", "ranger", "scales")
+packages <- c("tidyverse", "ivreg", "caret", "glmnet", "scales")
 
 installed <- rownames(installed.packages())
 
@@ -23,7 +23,7 @@ suppressPackageStartupMessages({
   library(tidyverse)
   library(ivreg)
   library(caret)
-  library(ranger)
+  library(glmnet)
   library(scales)
 })
 
@@ -236,71 +236,85 @@ cat("\nFirst-stage result:\n")
 print(first_stage_result)
 
 # ============================================================
-# 4. Random Forest Model
+# 4. LASSO Model
 # ============================================================
-
 
 # Outcome: total wealth
 outcome <- "tw"
 treatment <- "p401"
 
-
-# Predictor set for the Random Forest wealth model.
+# Predictor set for the LASSO wealth model.
 # We exclude asset/wealth-component variables such as a401, tfa, net_tfa,
 # tfa_he, hval, hmort, hequity, nifa, net_nifa, and net_n401 because they are
 # mechanically related to total wealth and would create leakage.
-# We also exclude squared/grouped variables because Random Forests handle
-# nonlinearities natively, while those grouped variables are used for the
-# replication and heterogeneity analysis.
-
+# LASSO uses base predictors plus pairwise interactions, then shrinks less
+# useful terms toward zero to reduce overfitting and improve interpretability.
 predictors <- c(
   "age", "inc", "fsize", "educ", "db", "marr", "male",
   "twoearn", "pira", "hown"
 )
 
-model_data <- data[, c(outcome, treatment, predictors)]
+# Add every pairwise interaction among treatment and predictors.
+add_engineered_terms <- function(df, base_vars) {
+  interaction_pairs <- combn(base_vars, 2, simplify = FALSE)
+  for (pair in interaction_pairs) {
+    interaction_name <- paste0(pair[1], "_x_", pair[2])
+    df[[interaction_name]] <- df[[pair[1]]] * df[[pair[2]]]
+  }
+  df
+}
 
+base_vars <- c(treatment, predictors)
+model_data <- add_engineered_terms(data[, c(outcome, base_vars)], base_vars)
 
 # Stratified 70/30 train/test split by 401(k) participation.
-# Stratification keeps the participant/nonparticipant mix similar in both samples.
-# The test set is held out for final predictive evaluation and treatment-effect estimation.
-
 train_index <- createDataPartition(model_data[[treatment]], p = 0.7, list = FALSE)
 train_data <- model_data[train_index, ]
 test_data <- model_data[-train_index, ]
 
-features <- c(treatment, predictors)
+interaction_features <- setdiff(names(model_data), c(outcome, base_vars))
+features <- c(base_vars, interaction_features)
 
-# Cross-validation and tuning
-# Tune Random Forest hyperparameters using 10-fold cross-validation on the training set.
-# The held-out test set is not used during tuning.
-
+# Tune LASSO penalty parameter using 10-fold cross-validation on the training set.
 cv_control <- trainControl(method = "cv", number = 10)
 
-tune_grid <- expand.grid(
-  mtry = c(2, 3, 4, 5, 6, 8, 10),
-  splitrule = c("variance", "extratrees"),
-  min.node.size = c(5, 10, 20)
+lasso_grid <- expand.grid(
+  alpha = 1,
+  lambda = 10^seq(-3, 1.5, length.out = 120)
 )
 
-rf_tuned <- train(
+lasso_tuned <- train(
   x = train_data[, features],
   y = train_data[[outcome]],
-  method = "ranger",
+  method = "glmnet",
   trControl = cv_control,
-  tuneGrid = tune_grid,
-  num.trees = 500
+  tuneGrid = lasso_grid,
+  preProcess = c("center", "scale")
 )
 
-# Test-set prediction
-test_predictions <- predict(rf_tuned, newdata = test_data[, features])
+# Coefficients at the CV-selected lambda.
+coef_matrix <- as.matrix(coef(
+  lasso_tuned$finalModel,
+  s = lasso_tuned$bestTune$lambda
+))
+
+coef_table <- data.frame(
+  term = rownames(coef_matrix),
+  coefficient = as.numeric(coef_matrix[, 1]),
+  is_interaction = grepl("_x_", rownames(coef_matrix)),
+  stringsAsFactors = FALSE
+)
+
+write.csv(coef_table, "lasso_coefficients.csv", row.names = FALSE)
+
+# Test-set prediction and performance.
+test_predictions <- predict(lasso_tuned, newdata = test_data[, features])
 
 test_rmse <- sqrt(mean((test_data[[outcome]] - test_predictions)^2))
 
 test_r2 <- 1 - sum((test_data[[outcome]] - test_predictions)^2) /
   sum((test_data[[outcome]] - mean(test_data[[outcome]]))^2)
 
-# Counterfactual prediction exercise
 # S-learner counterfactual prediction:
 # predict each test observation twice, once with p401 forced to 1 and once with
 # p401 forced to 0. The difference is the model-predicted treatment effect.
@@ -308,12 +322,14 @@ test_r2 <- 1 - sum((test_data[[outcome]] - test_predictions)^2) /
 # fully causal estimate, because 401(k) participation may be endogenous.
 test_treated <- test_data
 test_treated[[treatment]] <- 1
+test_treated <- add_engineered_terms(test_treated, base_vars)
 
 test_control <- test_data
 test_control[[treatment]] <- 0
+test_control <- add_engineered_terms(test_control, base_vars)
 
-pred_treated <- predict(rf_tuned, newdata = test_treated[, features])
-pred_control <- predict(rf_tuned, newdata = test_control[, features])
+pred_treated <- predict(lasso_tuned, newdata = test_treated[, features])
+pred_control <- predict(lasso_tuned, newdata = test_control[, features])
 
 ite <- pred_treated - pred_control
 ate <- mean(ite)
@@ -324,28 +340,27 @@ model_summary <- data.frame(
 )
 
 write.csv(model_summary, "model_summary.csv", row.names = FALSE)
+write.csv(model_summary, "lasso_model_summary.csv", row.names = FALSE)
 
-cat("\nRandom Forest model summary:\n")
+cat("\nLASSO model summary:\n")
 print(model_summary)
 
 # ============================================================
 # 5. Heterogeneity by Income
 # ============================================================
 
-test_results <- test_data
-test_results$pred_treated <- pred_treated
-test_results$pred_control <- pred_control
-test_results$ite <- ite
-test_results$row_id <- as.integer(rownames(test_data))
+# Use fixed income bins that align with the replication categories.
+test_income_group <- cut(
+  test_data$inc,
+  breaks = c(-Inf, 10000, 20000, 30000, 40000, 50000, 75000, Inf),
+  labels = c("<10k", "10-20k", "20-30k", "30-40k", "40-50k", "50-75k", ">75k"),
+  right = FALSE
+)
 
-data_with_row_id <- data %>%
-  mutate(row_id = row_number()) %>%
-  select(row_id, inc_group)
-
-test_results_with_groups <- test_results %>%
-  left_join(data_with_row_id, by = "row_id")
-
-heterogeneity_by_income <- test_results_with_groups %>%
+heterogeneity_by_income <- data.frame(
+  inc_group = test_income_group,
+  ite = ite
+) %>%
   group_by(inc_group) %>%
   summarise(
     n = n(),
@@ -355,8 +370,13 @@ heterogeneity_by_income <- test_results_with_groups %>%
   )
 
 write.csv(heterogeneity_by_income, "heterogeneity_by_income.csv", row.names = FALSE)
+write.csv(
+  heterogeneity_by_income %>% rename(income_group = inc_group, ate = avg_treatment_effect),
+  "lasso_ate_by_income_group.csv",
+  row.names = FALSE
+)
 
-cat("\nHeterogeneity by income:\n")
+cat("\nLASSO heterogeneity by income:\n")
 print(heterogeneity_by_income)
 
 # ============================================================
@@ -422,14 +442,14 @@ ggsave(
   height = 5
 )
 
-# Figure 3: Average Predicted Treatment Effect by Income Group
+# Figure 3: Average LASSO Predicted Treatment Effect by Income Group
 fig3 <- ggplot(heterogeneity_by_income, aes(x = inc_group, y = avg_treatment_effect)) +
   geom_col() +
   scale_y_continuous(labels = dollar_format()) +
   labs(
     title = "Average Predicted Treatment Effect by Income Group",
     x = "Income Group",
-    y = "Average Predicted Treatment Effect"
+    y = "Average LASSO Predicted Treatment Effect"
   ) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
@@ -452,7 +472,85 @@ cat("- summary_by_participation.csv\n")
 cat("- replication_ols_2sls_wide.csv\n")
 cat("- first_stage_result.csv\n")
 cat("- model_summary.csv\n")
+cat("- lasso_model_summary.csv\n")
+cat("- lasso_coefficients.csv\n")
 cat("- heterogeneity_by_income.csv\n")
+cat("- lasso_ate_by_income_group.csv\n")
 cat("- figures/figure_1_total_wealth_density.png\n")
 cat("- figures/figure_2_avg_wealth_by_income_participation.png\n")
 cat("- figures/figure_3_predicted_effect_by_income.png\n")
+
+# ============================================================
+# Optional Random Forest Benchmark - Not Run in Final Script
+# ============================================================
+# This section is kept only as a record of the alternative model considered.
+# The final report/code uses the LASSO model above because the group selected it
+# as the preferred final model due to its interpretability and comparable predictive performance.
+# To run this benchmark later, change if (FALSE) to if (TRUE) and make sure the
+# ranger package is installed and loaded.
+
+if (FALSE) {
+  library(ranger)
+
+  rf_predictors <- c(
+    "age", "inc", "fsize", "educ", "db", "marr", "male",
+    "twoearn", "pira", "hown"
+  )
+
+  rf_outcome <- "tw"
+  rf_treatment <- "p401"
+  rf_model_data <- data[, c(rf_outcome, rf_treatment, rf_predictors)]
+
+  rf_train_index <- createDataPartition(
+    rf_model_data[[rf_treatment]],
+    p = 0.7,
+    list = FALSE
+  )
+
+  rf_train_data <- rf_model_data[rf_train_index, ]
+  rf_test_data <- rf_model_data[-rf_train_index, ]
+  rf_features <- c(rf_treatment, rf_predictors)
+
+  rf_cv_control <- trainControl(method = "cv", number = 10)
+
+  rf_tune_grid <- expand.grid(
+    mtry = c(2, 3, 4, 5, 6, 8, 10),
+    splitrule = c("variance", "extratrees"),
+    min.node.size = c(5, 10, 20)
+  )
+
+  rf_tuned <- train(
+    x = rf_train_data[, rf_features],
+    y = rf_train_data[[rf_outcome]],
+    method = "ranger",
+    trControl = rf_cv_control,
+    tuneGrid = rf_tune_grid,
+    num.trees = 500
+  )
+
+  rf_test_predictions <- predict(rf_tuned, newdata = rf_test_data[, rf_features])
+
+  rf_test_rmse <- sqrt(mean((rf_test_data[[rf_outcome]] - rf_test_predictions)^2))
+
+  rf_test_r2 <- 1 - sum((rf_test_data[[rf_outcome]] - rf_test_predictions)^2) /
+    sum((rf_test_data[[rf_outcome]] - mean(rf_test_data[[rf_outcome]]))^2)
+
+  rf_test_treated <- rf_test_data
+  rf_test_treated[[rf_treatment]] <- 1
+
+  rf_test_control <- rf_test_data
+  rf_test_control[[rf_treatment]] <- 0
+
+  rf_pred_treated <- predict(rf_tuned, newdata = rf_test_treated[, rf_features])
+  rf_pred_control <- predict(rf_tuned, newdata = rf_test_control[, rf_features])
+
+  rf_ite <- rf_pred_treated - rf_pred_control
+  rf_ate <- mean(rf_ite)
+
+  rf_model_summary <- data.frame(
+    metric = c("RF Test RMSE", "RF Test R-squared", "RF Average Predicted Treatment Effect"),
+    value = c(rf_test_rmse, rf_test_r2, rf_ate)
+  )
+
+  print(rf_model_summary)
+}
