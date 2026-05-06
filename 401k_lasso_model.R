@@ -146,6 +146,30 @@ ate_by_income_group <- data.frame(
   mutate(income_group = factor(income_group, levels = income_labels)) %>%
   arrange(income_group)
 
+# ATE by education group for heterogeneity reporting.
+educ_breaks <- c(-Inf, 12, 13, 16, Inf)
+educ_labels <- c("<12", "12", "13-15", ">=16")
+
+test_educ_group <- cut(
+  test_data$educ,
+  breaks = educ_breaks,
+  labels = educ_labels,
+  right = FALSE
+)
+
+ate_by_education_group <- data.frame(
+  education_group = test_educ_group,
+  ite = ite
+) %>%
+  group_by(education_group) %>%
+  summarise(
+    n = n(),
+    ate = mean(ite),
+    .groups = "drop"
+  ) %>%
+  mutate(education_group = factor(education_group, levels = educ_labels)) %>%
+  arrange(education_group)
+
 # Subgroup-level out-of-sample RMSE for diagnostic purposes.
 # pred_treated and pred_control are counterfactual predictions, so a global
 # comparison against test_data$tw mixes factual and counterfactual cases.
@@ -202,3 +226,6 @@ write.csv(coef_table, "lasso_coefficients.csv", row.names = FALSE)
 
 # 5. Income-group ATE table.
 write.csv(ate_by_income_group, "lasso_ate_by_income_group.csv", row.names = FALSE)
+
+# 6. Education-group ATE table.
+write.csv(ate_by_education_group, "lasso_ate_by_education_group.csv", row.names = FALSE)
