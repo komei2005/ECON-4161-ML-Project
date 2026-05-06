@@ -121,6 +121,31 @@ ite <- pred_treated - pred_control
 # from the Chernozhukov & Hansen (2004) Panel A replication.
 ate <- mean(ite)
 
+# ATE by income group for heterogeneity reporting.
+# Uses fixed bins to align with replication tables.
+income_breaks <- c(-Inf, 10000, 20000, 30000, 40000, 50000, 75000, Inf)
+income_labels <- c("<10k", "10-20k", "20-30k", "30-40k", "40-50k", "50-75k", ">75k")
+
+test_income_group <- cut(
+  test_data$inc,
+  breaks = income_breaks,
+  labels = income_labels,
+  right = FALSE
+)
+
+ate_by_income_group <- data.frame(
+  income_group = test_income_group,
+  ite = ite
+) %>%
+  group_by(income_group) %>%
+  summarise(
+    n = n(),
+    ate = mean(ite),
+    .groups = "drop"
+  ) %>%
+  mutate(income_group = factor(income_group, levels = income_labels)) %>%
+  arrange(income_group)
+
 # Subgroup-level out-of-sample RMSE for diagnostic purposes.
 # pred_treated and pred_control are counterfactual predictions, so a global
 # comparison against test_data$tw mixes factual and counterfactual cases.
@@ -175,5 +200,5 @@ write.csv(model_summary, "lasso_model_summary.csv", row.names = FALSE)
 # 4. Full coefficient table at selected lambda.
 write.csv(coef_table, "lasso_coefficients.csv", row.names = FALSE)
 
-# 5. Interaction-only coefficient table.
-write.csv(interaction_coef_table, "lasso_interaction_coefficients.csv", row.names = FALSE)
+# 5. Income-group ATE table.
+write.csv(ate_by_income_group, "lasso_ate_by_income_group.csv", row.names = FALSE)
