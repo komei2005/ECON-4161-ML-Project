@@ -1,4 +1,4 @@
-"income_group","n","ate","median_treatment_effect"
+"inc_group","n","avg_treatment_effect","median_treatment_effect"
 "<10k",181,11681.1951691682,9969.92020924674
 "10-20k",574,11929.1174265608,11036.4406974113
 "20-30k",597,12415.6467193773,11536.1336132485

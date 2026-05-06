@@ -380,6 +380,37 @@ cat("\nLASSO heterogeneity by income:\n")
 print(heterogeneity_by_income)
 
 # ============================================================
+# 5b. Heterogeneity by Education
+# ============================================================
+
+test_educ_group <- cut(
+  test_data$educ,
+  breaks = c(-Inf, 12, 13, 16, Inf),
+  labels = c("<12", "12", "13-15", ">=16"),
+  right = FALSE
+)
+
+heterogeneity_by_education <- data.frame(
+  education_group = test_educ_group,
+  ite = ite
+) %>%
+  group_by(education_group) %>%
+  summarise(
+    n = n(),
+    ate = mean(ite, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+write.csv(
+  heterogeneity_by_education,
+  "lasso_ate_by_education_group.csv",
+  row.names = FALSE
+)
+
+cat("\nLASSO heterogeneity by education:\n")
+print(heterogeneity_by_education)
+
+# ============================================================
 # 6. Graphs for Report
 # ============================================================
 
@@ -479,6 +510,7 @@ cat("- lasso_ate_by_income_group.csv\n")
 cat("- figures/figure_1_total_wealth_density.png\n")
 cat("- figures/figure_2_avg_wealth_by_income_participation.png\n")
 cat("- figures/figure_3_predicted_effect_by_income.png\n")
+cat("- lasso_ate_by_education_group.csv\n")
 
 # ============================================================
 # Optional Random Forest Benchmark - Not Run in Final Script
